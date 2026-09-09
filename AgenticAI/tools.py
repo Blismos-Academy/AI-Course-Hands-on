@@ -29,7 +29,7 @@ def get_current_weather(location: str) -> int:
 
 def main():
 
-    primary_model = "gemini-2.5-flash"
+    primary_model = "gemini-2.flash"
     fallback_model = "gemini-2.5-pro"
 
     prompt = "What is the weather like in Bengaluru right now?"
