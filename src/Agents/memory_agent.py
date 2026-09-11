@@ -1,55 +1,44 @@
-import json
-import os
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 
 class MemoryAgent:
+    """Manages short-term conversation history."""
 
-    def __init__(self, session_id="default", max_messages=10):
-        self.session_id = session_id
+    def __init__(self, max_messages: int = 10) -> None:
+        if max_messages < 1:
+            raise ValueError("max_messages must be at least 1")
+
         self.max_messages = max_messages
-        self.file = "memory.json"
-        self.messages = self._load()
+        self._messages: list[dict[str, str]] = []
 
-    def _load(self):
-        if not os.path.exists(self.file):
-            return []
+    def add(self, role: str, content: str) -> None:
+        self._messages.append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
 
-        try:
-            with open(self.file, "r", encoding="utf-8") as file:
-                data = json.load(file)
+        self._messages = self._messages[-self.max_messages :]
 
-            return data.get(self.session_id, [])[-self.max_messages:]
+    def get(self) -> list[dict[str, str]]:
+        return list(self._messages)
 
-        except (json.JSONDecodeError, OSError):
-            return []
+    def get_messages(self) -> list[BaseMessage]:
+        messages: list[BaseMessage] = []
 
-    def add(self, role, content):
-        self.messages.append({
-            "role": role,
-            "content": content
-        })
+        for message in self._messages:
+            if message["role"] == "user":
+                messages.append(
+                    HumanMessage(content=message["content"])
+                )
 
-        self.messages = self.messages[-self.max_messages:]
-        self._save()
+            elif message["role"] == "assistant":
+                messages.append(
+                    AIMessage(content=message["content"])
+                )
 
-    def get(self):
-        return self.messages
+        return messages
 
-    def _save(self):
-        data = {}
-
-        if os.path.exists(self.file):
-            try:
-                with open(self.file, "r", encoding="utf-8") as file:
-                    data = json.load(file)
-            except (json.JSONDecodeError, OSError):
-                data = {}
-
-        data[self.session_id] = self.messages
-
-        with open(self.file, "w", encoding="utf-8") as file:
-            json.dump(data, file, indent=2, ensure_ascii=False)
-
-    def clear(self):
-        self.messages = []
-        self._save()
+    def clear(self) -> None:
+        self._messages.clear()

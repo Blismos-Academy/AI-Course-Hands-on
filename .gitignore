@@ -1,1 +1,13 @@
+# Environment
 .env
+
+# Google OAuth credentials
+credentials.json
+token.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Local memory
+memory.json

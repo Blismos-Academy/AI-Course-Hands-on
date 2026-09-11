@@ -7,7 +7,7 @@ class DocumentIngestion:
     def load_document(self):
 
         doc = Document(
-            r"C:\Users\User\Desktop\Blismos_doc\Weather_project\Data\weather_data.docx"
+            "D:\Agentic AI Project\AI-Course-Hands-on\Data\weather_data.docx"
         )
 
         text = []

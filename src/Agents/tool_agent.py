@@ -1,71 +1,121 @@
 import os
-import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+import requests
 from dotenv import load_dotenv
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.tools import BaseTool
 from langchain.tools import tool
+from langchain_groq import ChatGroq
+
 
 load_dotenv()
 
+
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
-BASE_URL = "https://api.openweathermap.org"
+OPENWEATHER_BASE_URL = "https://api.openweathermap.org"
+INDIA_TIMEZONE = ZoneInfo("Asia/Kolkata")
 
 
-def get_coordinates(location: str):
-    location = location.replace(", India", "").replace(",India", "")
+# ============================================================
+# Weather API helpers
+# ============================================================
 
-    params = {
-        "q": f"{location},IN",
-        "limit": 1,
-        "appid": OPENWEATHER_API_KEY
-    }
+def _validate_api_key() -> None:
+    if not OPENWEATHER_API_KEY:
+        raise RuntimeError(
+            "OPENWEATHER_API_KEY is not configured."
+        )
+
+
+def _get_coordinates(location: str) -> dict:
+    """Resolve an Indian location to latitude and longitude."""
+
+    _validate_api_key()
+
+    location = location.strip()
+
+    if not location:
+        raise ValueError("Location cannot be empty.")
+
+    location = (
+        location
+        .replace(", India", "")
+        .replace(",India", "")
+        .strip()
+    )
 
     response = requests.get(
-        f"{BASE_URL}/geo/1.0/direct",
-        params=params,
-        timeout=10
+        f"{OPENWEATHER_BASE_URL}/geo/1.0/direct",
+        params={
+            "q": f"{location},IN",
+            "limit": 1,
+            "appid": OPENWEATHER_API_KEY,
+        },
+        timeout=10,
     )
+
     response.raise_for_status()
 
     data = response.json()
 
     if not data:
-        raise ValueError(f"Could not find location '{location}' in India.")
+        raise ValueError(
+            f"Could not find location '{location}' in India."
+        )
+
+    place = data[0]
 
     return {
-        "name": data[0].get("name"),
-        "state": data[0].get("state"),
-        "country": data[0].get("country"),
-        "lat": data[0]["lat"],
-        "lon": data[0]["lon"]
+        "name": place.get("name", location),
+        "state": place.get("state"),
+        "country": place.get("country"),
+        "lat": place["lat"],
+        "lon": place["lon"],
     }
 
 
-@tool
-def get_current_weather(location: str) -> str:
-    """Get current weather for an Indian location."""
+def _weather_request(endpoint: str, **params) -> dict:
+    """Make a request to OpenWeather."""
 
-    coordinates = get_coordinates(location)
-
-    params = {
-        "lat": coordinates["lat"],
-        "lon": coordinates["lon"],
-        "appid": OPENWEATHER_API_KEY,
-        "units": "metric"
-    }
+    _validate_api_key()
 
     response = requests.get(
-        f"{BASE_URL}/data/2.5/weather",
-        params=params,
-        timeout=10
+        f"{OPENWEATHER_BASE_URL}{endpoint}",
+        params={
+            **params,
+            "appid": OPENWEATHER_API_KEY,
+            "units": "metric",
+        },
+        timeout=10,
     )
+
     response.raise_for_status()
 
-    data = response.json()
-    weather = data["weather"][0]
-    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    return response.json()
 
-    return str({
+
+# ============================================================
+# Weather tools
+# ============================================================
+
+@tool
+def get_current_weather(location: str) -> dict:
+    """Get the current weather for an Indian location."""
+
+    coordinates = _get_coordinates(location)
+
+    data = _weather_request(
+        "/data/2.5/weather",
+        lat=coordinates["lat"],
+        lon=coordinates["lon"],
+    )
+
+    weather = data["weather"][0]
+    now = datetime.now(INDIA_TIMEZONE)
+
+    return {
         "location": coordinates["name"],
         "state": coordinates["state"],
         "country": coordinates["country"],
@@ -78,72 +128,139 @@ def get_current_weather(location: str) -> str:
         "weather": weather["main"],
         "description": weather["description"],
         "wind_speed_mps": data["wind"]["speed"],
-        "cloudiness_percent": data["clouds"]["all"]
-    })
+        "cloudiness_percent": data["clouds"]["all"],
+    }
 
 
 @tool
-def get_weather_forecast(location: str) -> str:
-    """Get weather forecast for an Indian location."""
+def get_weather_forecast(location: str) -> dict:
+    """Get the weather forecast for an Indian location."""
 
-    coordinates = get_coordinates(location)
+    coordinates = _get_coordinates(location)
 
-    params = {
-        "lat": coordinates["lat"],
-        "lon": coordinates["lon"],
-        "appid": OPENWEATHER_API_KEY,
-        "units": "metric"
-    }
-
-    response = requests.get(
-        f"{BASE_URL}/data/2.5/forecast",
-        params=params,
-        timeout=10
+    data = _weather_request(
+        "/data/2.5/forecast",
+        lat=coordinates["lat"],
+        lon=coordinates["lon"],
     )
-    response.raise_for_status()
-
-    data = response.json()
-    now = datetime.now(ZoneInfo("Asia/Kolkata"))
 
     forecast = []
 
-    for item in data["list"]:
-        forecast.append({
-            "date": item["dt_txt"].split()[0],
-            "time": item["dt_txt"].split()[1],
-            "temperature_celsius": item["main"]["temp"],
-            "feels_like_celsius": item["main"]["feels_like"],
-            "humidity_percent": item["main"]["humidity"],
-            "weather": item["weather"][0]["main"],
-            "description": item["weather"][0]["description"],
-            "rain_probability": item.get("pop", 0),
-            "wind_speed_mps": item["wind"]["speed"]
-        })
+    for item in data.get("list", []):
+        forecast.append(
+            {
+                "date": item["dt_txt"].split()[0],
+                "time": item["dt_txt"].split()[1],
+                "temperature_celsius": item["main"]["temp"],
+                "feels_like_celsius": item["main"]["feels_like"],
+                "humidity_percent": item["main"]["humidity"],
+                "weather": item["weather"][0]["main"],
+                "description": item["weather"][0]["description"],
+                "rain_probability": item.get("pop", 0),
+                "wind_speed_mps": item["wind"]["speed"],
+            }
+        )
 
-    return str({
+    now = datetime.now(INDIA_TIMEZONE)
+
+    return {
         "location": coordinates["name"],
         "state": coordinates["state"],
         "country": coordinates["country"],
         "generated_date": now.strftime("%Y-%m-%d"),
         "generated_time": now.strftime("%H:%M:%S"),
         "timezone": "Asia/Kolkata",
-        "forecast": forecast
-    })
+        "forecast": forecast,
+    }
+
+
 @tool
-def get_current_datetime() -> str:
+def get_current_datetime() -> dict:
     """Get the current date and time in India."""
 
-    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    now = datetime.now(INDIA_TIMEZONE)
 
-    return str({
+    return {
         "date": now.strftime("%d %B %Y"),
         "time": now.strftime("%I:%M:%S %p"),
         "timezone": "Asia/Kolkata",
-        "day": now.strftime("%A")
-    })
+        "day": now.strftime("%A"),
+    }
 
-weather_tools = [
+
+weather_tools: list[BaseTool] = [
     get_current_weather,
     get_weather_forecast,
-    get_current_datetime
+    get_current_datetime,
 ]
+
+
+# ============================================================
+# Tool Agent
+# ============================================================
+
+class ToolAgent:
+    """Selects and executes the required external tools."""
+
+    SYSTEM_PROMPT = """
+You are the tool execution component of a trip-planning assistant.
+
+Determine which available tools are necessary to answer the user's request.
+
+Rules:
+- Execute only the tools that are required.
+- Use the correct arguments.
+- Do not answer the user.
+- Do not invent information.
+- Return the actual tool results.
+""".strip()
+
+    def __init__(
+        self,
+        llm: ChatGroq,
+        tools: list[BaseTool],
+    ) -> None:
+        self.tools = {
+            tool.name: tool
+            for tool in tools
+        }
+
+        self.llm = llm.bind_tools(tools)
+
+    def invoke(
+        self,
+        question: str,
+        history: list[BaseMessage] | None = None,
+    ) -> list[str]:
+
+        messages = [
+            SystemMessage(content=self.SYSTEM_PROMPT),
+            *(history or []),
+            HumanMessage(content=question),
+        ]
+
+        response = self.llm.invoke(messages)
+
+        results: list[str] = []
+
+        for tool_call in response.tool_calls:
+            name = tool_call["name"]
+            args = tool_call.get("args", {})
+
+            tool_instance = self.tools.get(name)
+
+            if tool_instance is None:
+                raise ValueError(
+                    f"Requested tool '{name}' is not available."
+                )
+
+            try:
+                result = tool_instance.invoke(args)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Tool '{name}' failed: {exc}"
+                ) from exc
+
+            results.append(str(result))
+
+        return results
