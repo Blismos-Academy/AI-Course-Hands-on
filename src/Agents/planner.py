@@ -1,50 +1,30 @@
 from typing import Literal
-
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field
 
-
-Route = Literal["memory", "rag", "tools", "both"]
-
+Route = Literal["memory", "rag", "tools", "mcp", "both"]
 
 class Plan(BaseModel):
     route: Route = Field(
-        description=(
-            "Execution route required to answer the user's request."
-        )
+        description="Execution route required to answer the user's request."
     )
-
 
 class Planner:
     """Determines which part of the system is required."""
 
     SYSTEM_PROMPT = """
-You are the planning component of a trip-planning assistant.
+You are the planner for a weather, clothing, and food recommendation system.
 
-Analyze the user's request and conversation history.
+Analyze the request and history to choose ONE route:
 
-Choose exactly one route:
+memory: Request answered from history alone.
+rag: Weather advice, food guidelines, or clothing safety rules from knowledge base.
+tools: Weather queries or live operations.
+mcp: Setting calendar events, reminders, or schedule alerts via MCP.
+both: Requires live external weather/tools AND knowledge-base/MCP scheduling.
 
-memory:
-Use this when the request can be answered from conversation history alone.
-
-rag:
-Use this when knowledge-base information is required but live information
-is not required.
-
-tools:
-Use this when live external information is required but knowledge-base
-information is not required.
-
-both:
-Use this when both live external information and knowledge-base information
-are required.
-
-Do not answer the user.
-Do not execute tools.
-Do not use keyword matching.
-Make the decision from the semantic meaning of the request.
+Do not answer the user directly.
 """.strip()
 
     def __init__(self, llm: ChatGroq) -> None:
@@ -60,7 +40,5 @@ Make the decision from the semantic meaning of the request.
             *(history or []),
             HumanMessage(content=question),
         ]
-
         result: Plan = self.llm.invoke(messages)
-
         return result.route
