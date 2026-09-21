@@ -225,7 +225,56 @@ Rules:
             for tool in tools
         }
 
-        self.llm = llm.bind_tools(tools)
+        self.llm = llm.bind_tools(tools, tool_choice="auto")
+
+    def _requires_weather_tool(self, question: str) -> bool:
+        """
+        Guard the tool-calling model.
+
+        Only requests that clearly need one of the registered weather/date
+        tools are allowed to reach the tool-bound LLM. This prevents casual
+        conversation, safety refusals, and unrelated requests from producing
+        Groq tool_use_failed errors.
+        """
+        text = question.strip().lower()
+
+        weather_terms = {
+            "weather",
+            "temperature",
+            "forecast",
+            "rain",
+            "raining",
+            "humidity",
+            "wind",
+            "cloud",
+            "cloudy",
+            "sunny",
+            "hot",
+            "cold",
+        }
+
+        datetime_phrases = {
+            "what time is it",
+            "current time",
+            "what is the time",
+            "what's the time",
+            "what date is it",
+            "what is the date",
+            "today's date",
+            "current date",
+            "what day is it",
+        }
+
+        words = set(
+            text.replace("?", " ")
+            .replace(",", " ")
+            .replace(".", " ")
+            .split()
+        )
+
+        return bool(words & weather_terms) or any(
+            phrase in text for phrase in datetime_phrases
+        )
 
     def invoke(
         self,
@@ -233,13 +282,24 @@ Rules:
         history: list[BaseMessage] | None = None,
     ) -> list[str]:
 
+        # Critical guard: do not call the tool-bound LLM for requests that
+        # do not require a weather/date tool.
+        if not self._requires_weather_tool(question):
+            return []
+
         messages = [
             SystemMessage(content=self.SYSTEM_PROMPT),
             *(history or []),
             HumanMessage(content=question),
         ]
 
-        response = self.llm.invoke(messages)
+        try:
+            response = self.llm.invoke(messages)
+        except Exception as exc:
+            # Never expose the provider's raw tool_use_failed error to the UI.
+            raise RuntimeError(
+                "Weather tool execution could not be completed."
+            ) from exc
 
         results: list[str] = []
 
